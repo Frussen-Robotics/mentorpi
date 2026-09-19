@@ -104,7 +104,7 @@ In another terminal on the same machine, verify the endpoint:
 curl http://127.0.0.1:8000/status
 ```
 
-When rosbridge is available, expect HTTP `200 OK` with `Content-Type: application/json` and this body on the MentorPi:
+When rosbridge and battery data are available, expect HTTP `200 OK` with `Content-Type: application/json` and a body like this on the MentorPi:
 
 ```json
 {
@@ -114,13 +114,20 @@ When rosbridge is available, expect HTTP `200 OK` with `Content-Type: applicatio
     "status": "ok",
     "version": 2,
     "distro": "humble"
+  },
+  "battery": {
+    "status": "ok",
+    "millivolts": 7590,
+    "volts": 7.59
   }
 }
 ```
 
-Each request opens a short-lived connection to `ws://127.0.0.1:9090` and calls `/rosapi/get_ros_version`. The check has a two-second deadline, plus up to 0.2 seconds for connection cleanup. The version and distro come from the service response.
+Each request runs two independent checks through short-lived connections to `ws://127.0.0.1:9090`: a call to `/rosapi/get_ros_version` and a read-only subscription to `/ros_robot_controller/battery` (`std_msgs/msg/UInt16`). The checks run concurrently within the request, each with a two-second deadline plus up to 0.2 seconds for connection cleanup. The version and distro come from the service response.
 
-If rosbridge is unreachable, times out, or returns a failed or invalid service response, the endpoint still returns HTTP `200 OK`:
+Battery status uses the first valid sample received during that request. `millivolts` preserves the ROS message's raw integer; `volts` is that value divided by 1000. For example, `7581` becomes `7.581` V. The connection closes after the check, removing its subscription; there is no cache or background monitoring. No battery percentage or remaining runtime is estimated.
+
+If rosbridge is unreachable or neither check succeeds before its deadline, the endpoint still returns HTTP `200 OK`:
 
 ```json
 {
@@ -128,10 +135,15 @@ If rosbridge is unreachable, times out, or returns a failed or invalid service r
   "runtime": "ok",
   "ros": {
     "status": "unavailable"
+  },
+  "battery": {
+    "status": "unavailable"
   }
 }
 ```
 
-`"runtime": "ok"` still means only that the MentorPi runtime process is alive and able to handle an HTTP request. ROS status verifies connectivity through rosbridge and the ROS version service; it does not establish complete robot readiness or the health of motors, camera, LiDAR, network, battery, or other hardware. No vendor changes or host ROS libraries are required.
+If no valid battery sample is obtained before the deadline or its connection fails, only `battery` reports `{"status": "unavailable"}`; ROS version status is independent and may still be `"ok"`. Likewise, a failed or invalid ROS version response makes only `ros` unavailable.
+
+`"runtime": "ok"` still means only that the MentorPi runtime process is alive and able to handle an HTTP request. ROS status verifies connectivity through rosbridge and the ROS version service; battery status reports only the measured voltage. Neither establishes complete robot readiness or the health of motors, camera, LiDAR, network, battery, or other hardware. No vendor changes or host ROS libraries are required.
 
 FastAPI's default documentation remains available at `/docs` and `/redoc`, with the OpenAPI schema at `/openapi.json`. Stop the server with `Ctrl+C`.

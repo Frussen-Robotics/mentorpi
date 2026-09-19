@@ -46,3 +46,44 @@ async def get_ros_status():
     except (OSError, TimeoutError, WebSocketException, ValueError):
         pass
     return {"status": "unavailable"}
+
+
+async def get_battery_status():
+    """Read one valid battery sample through a short-lived subscription."""
+    topic = "/ros_robot_controller/battery"
+    try:
+        async with asyncio.timeout(2):
+            async with connect(
+                "ws://127.0.0.1:9090",
+                proxy=None,
+                open_timeout=2,
+                close_timeout=0.2,
+            ) as websocket:
+                # Closing this connection also removes its subscription.
+                await websocket.send(json.dumps({
+                    "op": "subscribe",
+                    "id": uuid4().hex,
+                    "topic": topic,
+                    "type": "std_msgs/msg/UInt16",
+                    "queue_length": 1,
+                }))
+                while True:
+                    response = json.loads(await websocket.recv())
+                    if not isinstance(response, dict):
+                        continue
+                    if response.get("op") != "publish" or response.get("topic") != topic:
+                        continue
+                    message = response.get("msg")
+                    if not isinstance(message, dict):
+                        continue
+                    millivolts = message.get("data")
+                    if type(millivolts) is not int or not 0 <= millivolts <= 65535:
+                        continue
+                    return {
+                        "status": "ok",
+                        "millivolts": millivolts,
+                        "volts": millivolts / 1000,
+                    }
+    except (OSError, TimeoutError, WebSocketException, ValueError):
+        pass
+    return {"status": "unavailable"}
