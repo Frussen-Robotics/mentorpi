@@ -80,3 +80,39 @@ GET /status
 The initial endpoint only needs to prove that the MentorPi runtime can run locally on the Raspberry Pi and expose a stable capability interface.
 
 ROS state, battery information, networking, sensors, and motion capabilities will be added incrementally after this first vertical slice works.
+
+## Run locally
+
+From the repository root, create a local virtual environment and install the runtime dependencies:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+This keeps the runtime dependencies separate from the vendor Python environment.
+
+Start the server on the local loopback interface:
+
+```bash
+.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal on the same machine, verify the endpoint:
+
+```bash
+curl http://127.0.0.1:8000/status
+```
+
+Expected response: HTTP `200 OK` with `Content-Type: application/json` and this body:
+
+```json
+{
+  "platform": "mentorpi",
+  "runtime": "ok"
+}
+```
+
+This response means only that the MentorPi runtime process is alive and able to handle an HTTP request. It does not inspect or imply that ROS, motors, camera, LiDAR, network, battery, or any other robot hardware or service is operational.
+
+FastAPI's default documentation remains available at `/docs` and `/redoc`, with the OpenAPI schema at `/openapi.json`. Stop the server with `Ctrl+C`.
