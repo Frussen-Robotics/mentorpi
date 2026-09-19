@@ -83,7 +83,7 @@ ROS state, battery information, networking, sensors, and motion capabilities wil
 
 ## Run locally
 
-From the repository root, create a local virtual environment and install the runtime dependencies:
+With Python 3.11 or newer, from the repository root, create a local virtual environment and install the runtime dependencies:
 
 ```bash
 python3 -m venv .venv
@@ -104,15 +104,34 @@ In another terminal on the same machine, verify the endpoint:
 curl http://127.0.0.1:8000/status
 ```
 
-Expected response: HTTP `200 OK` with `Content-Type: application/json` and this body:
+When rosbridge is available, expect HTTP `200 OK` with `Content-Type: application/json` and this body on the MentorPi:
 
 ```json
 {
   "platform": "mentorpi",
-  "runtime": "ok"
+  "runtime": "ok",
+  "ros": {
+    "status": "ok",
+    "version": 2,
+    "distro": "humble"
+  }
 }
 ```
 
-This response means only that the MentorPi runtime process is alive and able to handle an HTTP request. It does not inspect or imply that ROS, motors, camera, LiDAR, network, battery, or any other robot hardware or service is operational.
+Each request opens a short-lived connection to `ws://127.0.0.1:9090` and calls `/rosapi/get_ros_version`. The check has a two-second deadline, plus up to 0.2 seconds for connection cleanup. The version and distro come from the service response.
+
+If rosbridge is unreachable, times out, or returns a failed or invalid service response, the endpoint still returns HTTP `200 OK`:
+
+```json
+{
+  "platform": "mentorpi",
+  "runtime": "ok",
+  "ros": {
+    "status": "unavailable"
+  }
+}
+```
+
+`"runtime": "ok"` still means only that the MentorPi runtime process is alive and able to handle an HTTP request. ROS status verifies connectivity through rosbridge and the ROS version service; it does not establish complete robot readiness or the health of motors, camera, LiDAR, network, battery, or other hardware. No vendor changes or host ROS libraries are required.
 
 FastAPI's default documentation remains available at `/docs` and `/redoc`, with the OpenAPI schema at `/openapi.json`. Stop the server with `Ctrl+C`.
