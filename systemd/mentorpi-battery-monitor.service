@@ -1,0 +1,17 @@
+[Unit]
+Description=MentorPi battery voice monitor
+After=mentorpi-runtime.service
+Wants=mentorpi-runtime.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/mentorpi/battery-monitor.env
+ExecStart=/usr/bin/python3 ${MENTORPI_BATTERY_SCRIPT}
+Restart=on-failure
+RestartSec=30
+KillMode=control-group
+TimeoutStopSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target
