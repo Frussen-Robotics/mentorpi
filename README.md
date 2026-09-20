@@ -147,3 +147,123 @@ If no valid battery sample is obtained before the deadline or its connection fai
 `"runtime": "ok"` still means only that the MentorPi runtime process is alive and able to handle an HTTP request. ROS status verifies connectivity through rosbridge and the ROS version service; battery status reports only the measured voltage. Neither establishes complete robot readiness or the health of motors, camera, LiDAR, network, battery, or other hardware. No vendor changes or host ROS libraries are required.
 
 FastAPI's default documentation remains available at `/docs` and `/redoc`, with the OpenAPI schema at `/openapi.json`. Stop the server with `Ctrl+C`.
+
+## Agent workspaces and reusable components
+
+This repository contains reusable robot software, including the body API,
+battery monitor, and systemd service definitions.
+
+Agent identity, personality, memories, and personal instructions belong in
+the agent's separate OpenClaw workspace. A new robot can use a fresh workspace;
+it does not need a copy of Ruben's workspace.
+
+The battery monitor uses the external `speak` skill installed in that workspace.
+Its location is configured through `MENTORPI_SPEAK_SCRIPT`; the monitor does not
+require a workspace named `ruben-workspace` or a running OpenClaw agent.
+
+## Automatic startup and battery announcements
+
+### New robot setup
+
+1. Clone this repository and install the runtime dependencies as described above.
+2. Create the new agent's OpenClaw workspace and install the `speak` skill.
+   Configure its OpenAI API key and ALSA audio device, then verify speech manually.
+3. Install the runtime and battery monitor as user systemd services.
+4. Configure this robot's paths and credentials locally, outside Git.
+
+The commands below are for a new installation. On an existing robot, inspect
+and merge existing configuration and service files instead of overwriting them.
+
+### Runtime service
+
+Copy `systemd/mentorpi-runtime.service` to `~/.config/systemd/user/`.
+
+Before enabling it, adjust `WorkingDirectory` and `ExecStart` in the installed
+copy to match the actual repository and virtual environment paths. The supplied
+runtime unit currently uses `/home/pi/frussen-robotics/mentorpi`.
+
+### Battery monitor configuration
+
+Create a private configuration file from the example:
+
+```bash
+mkdir -p ~/.config/mentorpi
+chmod 700 ~/.config/mentorpi
+install -m 600 systemd/battery-monitor.env.example \
+  ~/.config/mentorpi/battery-monitor.env
+```
+
+Edit this local file and set:
+
+- `MENTORPI_BATTERY_SCRIPT`: absolute path to this repository's `battery_monitor.py`.
+- `MENTORPI_SPEAK_SCRIPT`: absolute path to the installed skill's `scripts/run.py`.
+- `OPENAI_API_KEY`: the speech API key.
+- `SPEAK_ALSA_DEVICE`: the audio device verified on this robot.
+
+Voice, polling interval, and voltage thresholds are also configurable in that
+file. An optional `MENTORPI_BATTERY_MESSAGE` overrides the spoken message.
+
+Never commit the real configuration file or API key. A shell `export` alone
+does not configure the systemd service.
+
+### Enable the services
+
+After installing and configuring the runtime unit:
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/mentorpi-battery-monitor.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now mentorpi-runtime.service
+systemctl --user enable --now mentorpi-battery-monitor.service
+loginctl show-user "$USER" -p Linger
+```
+
+For startup without an interactive login, `Linger` must be `yes`.
+If necessary, enable it with:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+The battery monitor requests startup of `mentorpi-runtime.service`.
+If the API or ROS is temporarily unavailable, it waits and polls again without
+speaking or changing the saved announcement state.
+
+### Announcement behavior
+
+With the default configuration:
+
+- Poll `/status` every 10 seconds.
+- Attempt one spoken announcement when voltage is strictly below 7.2 V.
+- Rearm when voltage is strictly above 7.4 V.
+- Preserve the announcement state across service restarts and robot reboots.
+- Leave the native Hiwonder low-voltage beep unchanged.
+
+State is stored under `$XDG_STATE_HOME/mentorpi-battery-monitor`, or
+`~/.local/state/mentorpi-battery-monitor` when that variable is unset.
+Do not copy this state to a new robot.
+
+The monitor records the attempt before invoking speech to prevent duplicate
+announcements after a restart. If speech fails, the error is logged and no
+automatic speech retry occurs until the monitor has rearmed.
+Speech has a 45-second timeout and requires network access and valid API credentials.
+
+The monitor is an advisory notification, not a battery protection or shutdown
+mechanism.
+
+### Inspect and manage
+
+```bash
+systemctl --user status mentorpi-battery-monitor.service --no-pager
+journalctl --user -u mentorpi-battery-monitor.service -n 50 --no-pager
+systemctl --user restart mentorpi-battery-monitor.service
+systemctl --user stop mentorpi-battery-monitor.service
+```
+
+After editing the local environment file, restart the battery monitor.
+After updating an installed service definition, also run
+`systemctl --user daemon-reload`.
+
+The threshold logic and state persistence have been tested in simulation.
+End-to-end speech from the service should also be verified on each robot.
