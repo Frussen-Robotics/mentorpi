@@ -6,6 +6,7 @@ import signal
 from pathlib import Path
 
 from openai import AsyncOpenAI
+from identity import apply_identity
 
 RATE = 24000
 CHUNK_BYTES = 4800  # 100 ms, PCM16 mono
@@ -135,6 +136,10 @@ async def main():
         )
     if not os.environ.get("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY assente")
+
+    workspace = os.environ.get("CONVERSATION_WORKSPACE")
+    if workspace:
+        instructions = apply_identity(instructions, workspace)
 
     recorder = player = None
     try:

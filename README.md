@@ -365,7 +365,38 @@ shutdown, and battery monitor restoration have been verified on hardware.
 It does not manage the battery monitor; prefer the systemd service for
 normal use.
 
-The conversation currently uses generic instructions. It does not
-automatically load an OpenClaw workspace, identity, or memories, and has
-no backend tools or robot motion control. Wake-word activation, shared
+The conversation can load an agent's identity and speaking style from
+a configured OpenClaw workspace. Memories and other conversations are not
+loaded. Backend tools, robot motion control, wake-word activation, shared
 announcement handling, and acoustic echo cancellation are not implemented.
+
+## Voice identity
+
+Set `CONVERSATION_WORKSPACE` in the local
+`~/.config/mentorpi/conversation.env` file to the absolute path of the
+agent's OpenClaw workspace.
+
+At each session startup, the service reads `IDENTITY.md` and the `## Vibe`
+section of `SOUL.md`. Both must contain non-empty text. Missing files or
+empty identity/style stop startup with an error. Other sections of
+`SOUL.md` are not imported.
+
+The identity is combined with the base conversation instructions.
+If configured, `CONVERSATION_INSTRUCTIONS_FILE` supplies those base
+instructions. The voice interface's capability limits are appended last.
+
+Without `CONVERSATION_WORKSPACE`, only the base instructions are used.
+Personal workspace files and credentials stay outside this repository.
+Each robot can point to its own agent's workspace.
+
+After editing identity files or configuration, start a new session:
+
+```bash
+systemctl --user restart mentorpi-conversation.service
+```
+
+Restarting does not restore the previous conversation history.
+Workspace memories and other OpenClaw chats are not synchronized.
+
+On Ruben, the agent name, family reference, and absence of invented
+personal memories were checked in a spoken conversation.
