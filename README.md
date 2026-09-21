@@ -19,7 +19,7 @@ The vendor-provided system has been verified with:
 * RRC controller board
 * local network control
 
-Implemented capabilities include the local status API, persistent battery announcements, and an on-demand GPT Live conversation service.
+Implemented capabilities include the local status API, persistent battery announcements, workspace voice identity, and GPT Live conversation with local wake listening at boot and spoken session closure.
 
 ## Architecture
 
@@ -274,7 +274,7 @@ The conversation service connects the robot's microphone and speaker to
 `gpt-live-1`. It uses its own Python environment and does not invoke the
 external `speak` skill.
 
-It starts on demand, not at boot. Microphone audio is sent to OpenAI while
+The GPT Live session starts on demand, not at boot. The optional local wake listener starts at boot and activates it. Microphone audio is sent to OpenAI while
 the session is active. Input and output transcripts are printed to the
 systemd journal; do not share logs containing private conversations.
 The API session is configured with `store: false`.
@@ -331,8 +331,8 @@ systemctl --user status mentorpi-conversation.service --no-pager
 journalctl --user -u mentorpi-conversation.service -n 30 -f
 ```
 
-Wait for the session-active message before speaking. Ctrl+C exits the log
-viewer only; it does not stop the conversation.
+Wait for the spoken greeting (requested as "Eccomi") before continuing.
+Ctrl+C exits the log viewer only; it does not stop the conversation.
 
 To stop microphone capture and close the session:
 
@@ -367,8 +367,8 @@ normal use.
 
 The conversation can load an agent's identity and speaking style from
 a configured OpenClaw workspace. Memories and other conversations are not
-loaded. Backend tools, robot motion control, wake-word activation, shared
-announcement handling, and acoustic echo cancellation are not implemented.
+loaded. Backend tools, robot motion control, shared announcement handling,
+and acoustic echo cancellation are not implemented.
 
 ## Voice identity
 
@@ -400,3 +400,136 @@ Workspace memories and other OpenClaw chats are not synchronized.
 
 On Ruben, the agent name, family reference, and absence of invented
 personal memories were checked in a spoken conversation.
+
+## Wake listening and spoken closure
+
+### Session lifecycle
+
+1. `mentorpi-wake.service` starts at boot and listens locally using Vosk.
+   No GPT Live session is opened while waiting.
+2. When the final transcript exactly matches `WAKE_PHRASE` (default:
+   `ciao ruben`), the listener releases the microphone and starts
+   `mentorpi-conversation.service`.
+3. The Live session requests a short greeting, "Eccomi". Wait for the greeting
+   before continuing to speak.
+4. Say `notte ruben` as a standalone phrase after a short pause.
+   The conversation detects it in the user's GPT Live transcript.
+5. Microphone samples sent to Live are replaced with silence during the
+   farewell. The session requests "Buonanotte", finishes playback, and closes.
+6. The battery monitor is restored if it was previously active, and the
+   local wake listener resumes.
+
+This is transcription-based activation, not a dedicated acoustic wake-word
+model. Recognition of connected speech is imperfect; clear pronunciation
+and a pause after the phrase help. A restricted Vosk vocabulary was tested
+and rejected because similar phrases caused false activations.
+The implementation uses the full Italian vocabulary.
+
+The sleep detector joins transcript fragments and treats a gap of at least
+one second between their timestamps as a new phrase. Recognition and
+transcript delivery can introduce a delay.
+
+Live has no end-of-utterance audio event in this implementation. Farewell
+completion uses voice activity and transcript quiet time, with bounded
+timeouts. A manual service stop bypasses the spoken farewell.
+
+### Install the local wake listener
+
+First install and configure the conversation and battery services above.
+From the repository root:
+
+```bash
+python3 -m venv ~/.cache/mentorpi/wake/venv
+~/.cache/mentorpi/wake/venv/bin/python -m pip install -r wake/requirements.txt
+```
+
+Download `vosk-model-small-it-0.22` from the official model list:
+https://alphacephei.com/vosk/models
+
+Extract the model outside the repository, for example under:
+`~/.cache/mentorpi/wake/models/vosk-model-small-it-0.22`.
+
+For a fresh installation only:
+
+```bash
+mkdir -p ~/.config/mentorpi ~/.config/systemd/user
+install -m 600 wake/wake.env.example ~/.config/mentorpi/wake.env
+cp systemd/mentorpi-wake.service ~/.config/systemd/user/
+```
+
+On existing installations, inspect and merge configuration instead of
+overwriting it. Edit the local `wake.env` and set absolute paths:
+
+- `WAKE_PYTHON`: the wake environment's Python executable.
+- `WAKE_SCRIPT`: this repository's `wake/listen.py`.
+- `WAKE_MODEL_PATH`: the extracted Italian model directory.
+- `WAKE_MIC`: the ALSA capture device.
+- `WAKE_PHRASE`: the exact activation transcript, default `ciao ruben`.
+
+The wake listener needs no API key. A different phrase must be tested with
+the chosen language model; changing this setting does not train a model.
+
+In the local `conversation.env`, optional `CONVERSATION_SLEEP_PHRASE`
+changes the closure phrase. Its default is `notte ruben`.
+The greeting and farewell text are currently defined in the code.
+
+### Enable automatic wake listening
+
+Stop any foreground copy of `wake/listen.py` before enabling the service.
+A process lock prevents two copies of the listener from running together.
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now mentorpi-wake.service
+loginctl show-user "$USER" -p Linger
+```
+
+`Linger=yes` is required for the user service to start without an SSH login.
+If necessary:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
+
+Enable the wake service, not the conversation service, for boot activation.
+The wake service retries after failures, subject to systemd's start limit.
+
+### Inspect and stop
+
+```bash
+systemctl --user status mentorpi-wake.service --no-pager
+journalctl --user -u mentorpi-wake.service -n 30 -f
+journalctl --user -u mentorpi-conversation.service -n 30 -f
+```
+
+The current diagnostic output logs non-empty Vosk transcripts, including
+speech that does not activate the robot. These transcripts remain local
+but may be retained in the systemd journal.
+
+Stopping the wake listener does not stop an already active Live session.
+To stop both:
+
+```bash
+systemctl --user stop mentorpi-wake.service
+systemctl --user stop mentorpi-conversation.service
+```
+
+To also prevent wake listening at the next boot:
+
+```bash
+systemctl --user disable mentorpi-wake.service
+```
+
+Restart the wake service after changing `wake.env`.
+After updating an installed unit file, run `systemctl --user daemon-reload`.
+
+### Hardware validation
+
+On Ruben, repeated wake/conversation/closure cycles, the spoken greeting
+and farewell, and automatic wake listening after a reboot were verified.
+Wake recognition remains imperfect; comprehensive false-activation testing
+has not been completed.
+
+The reusable code and example configuration belong in this repository.
+Models, virtual environments, credentials, agent identity, and local
+configuration remain outside Git.

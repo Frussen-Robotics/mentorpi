@@ -7,6 +7,8 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 from identity import apply_identity
+from sleep_phrase import SleepPhraseDetector, SleepRequested
+from farewell import say_goodnight, finish_playback
 
 RATE = 24000
 CHUNK_BYTES = 4800  # 100 ms, PCM16 mono
@@ -28,19 +30,24 @@ async def stop_process(process):
         await process.wait()
 
 
-async def stream_microphone(connection, recorder):
+async def stream_microphone(connection, recorder, closing):
     while True:
         try:
             pcm = await recorder.stdout.readexactly(CHUNK_BYTES)
         except asyncio.IncompleteReadError:
             raise RuntimeError("La registrazione dal microfono si è interrotta")
+        if closing.is_set():
+            pcm = b"\x00" * len(pcm)
         await connection.session.input_audio.append(
             audio=base64.b64encode(pcm).decode("ascii")
         )
 
 
-async def receive_events(connection, queue):
+async def receive_events(connection, queue, closing):
     previous_speaker = None
+    sleep_detector = SleepPhraseDetector(
+        os.environ.get("CONVERSATION_SLEEP_PHRASE", "notte ruben")
+    )
     while True:
         event = await connection.recv()
         if event is None:
@@ -66,6 +73,13 @@ async def receive_events(connection, queue):
                 print(f"\n{speaker}: ", end="", flush=True)
                 previous_speaker = speaker
             print(event.delta, end="", flush=True)
+            if speaker == "Tu" and sleep_detector.feed(
+                event.delta, event.start_ms, event.end_ms
+            ):
+                closing.set()
+                print("\nChiusura richiesta. Saluto: ", end="", flush=True)
+                await say_goodnight(connection, queue)
+                raise SleepRequested()
 
         elif event.type == "error":
             raise RuntimeError(
@@ -181,14 +195,28 @@ async def main():
                         "Parla pure. Arresto tramite Ctrl+C o systemctl stop.",
                         flush=True,
                     )
+                    await connection.session.commentary.append(
+                        content=(
+                            "La conversazione è appena stata attivata. "
+                            "Di' soltanto: Eccomi. Poi attendi che l'utente parli."
+                        ),
+                        delegation_id=None,
+                        event_id="conversation_greeting",
+                    )
+                    closing = asyncio.Event()
                     queue = asyncio.Queue(maxsize=50)
                     try:
                         async with asyncio.timeout(max_seconds or None):
-                            async with asyncio.TaskGroup() as group:
-                                group.create_task(stream_microphone(connection, recorder))
-                                group.create_task(receive_events(connection, queue))
-                                group.create_task(play_audio(player, queue))
-                                group.create_task(watch_player(player))
+                            try:
+                                async with asyncio.TaskGroup() as group:
+                                    group.create_task(stream_microphone(connection, recorder, closing))
+                                    group.create_task(receive_events(connection, queue, closing))
+                                    group.create_task(play_audio(player, queue))
+                                    group.create_task(watch_player(player))
+                            except* SleepRequested:
+                                print("\nCompleto la riproduzione...", flush=True)
+                                await finish_playback(player, queue)
+                                print("Audio terminato. Chiudo la sessione.", flush=True)
                     except TimeoutError:
                         print("\nDurata configurata raggiunta.", flush=True)
                 finally:
