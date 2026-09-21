@@ -1,0 +1,17 @@
+[Unit]
+Description=MentorPi GPT Live conversation
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/mentorpi/conversation.env
+Environment=PYTHONUNBUFFERED=1
+RuntimeDirectory=mentorpi-conversation
+RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/python3 ${CONVERSATION_GUARD_SCRIPT} pause
+ExecStart=/usr/bin/env ${CONVERSATION_PYTHON} ${CONVERSATION_SCRIPT}
+ExecStopPost=/usr/bin/python3 ${CONVERSATION_GUARD_SCRIPT} restore
+Restart=no
+KillMode=control-group
+TimeoutStartSec=30
+TimeoutStopSec=15
+UMask=0077

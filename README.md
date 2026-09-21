@@ -19,7 +19,7 @@ The vendor-provided system has been verified with:
 * RRC controller board
 * local network control
 
-Development is now moving from hardware verification to the first minimal body capability.
+Implemented capabilities include the local status API, persistent battery announcements, and an on-demand GPT Live conversation service.
 
 ## Architecture
 
@@ -79,7 +79,7 @@ GET /status
 
 The initial endpoint only needs to prove that the MentorPi runtime can run locally on the Raspberry Pi and expose a stable capability interface.
 
-ROS state, battery information, networking, sensors, and motion capabilities will be added incrementally after this first vertical slice works.
+ROS connectivity and battery voltage are now exposed through this endpoint. Additional sensing and motion capabilities will be added incrementally.
 
 ## Run locally
 
@@ -267,3 +267,105 @@ After updating an installed service definition, also run
 
 The threshold logic and state persistence have been tested in simulation.
 End-to-end speech from the service should also be verified on each robot.
+
+## GPT Live conversation
+
+The conversation service connects the robot's microphone and speaker to
+`gpt-live-1`. It uses its own Python environment and does not invoke the
+external `speak` skill.
+
+It starts on demand, not at boot. Microphone audio is sent to OpenAI while
+the session is active. Input and output transcripts are printed to the
+systemd journal; do not share logs containing private conversations.
+The API session is configured with `store: false`.
+
+### Install on a new robot
+
+From the repository root, with Python 3.11 or newer and ALSA's
+`arecord` and `aplay` available:
+
+```bash
+python3 -m venv ~/.cache/mentorpi/conversation/venv
+~/.cache/mentorpi/conversation/venv/bin/python \
+  -m pip install -r conversation/requirements.txt
+```
+
+The following copies are for a fresh installation only. On an existing
+installation, preserve and merge local configuration.
+
+```bash
+mkdir -p ~/.config/mentorpi ~/.config/systemd/user
+install -m 600 conversation/conversation.env.example \
+  ~/.config/mentorpi/conversation.env
+cp systemd/mentorpi-conversation.service ~/.config/systemd/user/
+```
+
+Edit `~/.config/mentorpi/conversation.env` before starting the service:
+
+- Set `CONVERSATION_PYTHON` to the dedicated environment's Python executable.
+- Set `CONVERSATION_SCRIPT` to the absolute path of `conversation/run.py`.
+- Set `CONVERSATION_GUARD_SCRIPT` to the absolute path of
+  `conversation/battery_guard.py`.
+- Set `CONVERSATION_MIC` and `SPEAK_ALSA_DEVICE` for this robot's audio hardware.
+- Set `OPENAI_API_KEY` locally; never commit it.
+- Set `SPEAK_LIVE_VOICE` to the desired voice.
+- Optionally set `CONVERSATION_INSTRUCTIONS_FILE` to a local UTF-8 prompt file.
+
+`CONVERSATION_MAX_SECONDS=0` removes the application's duration limit.
+A positive value limits the conversation duration in seconds. API limits,
+network failures, or audio errors can still end the session; automatic
+reconnection is not implemented.
+
+The supplied service expects the battery monitor service described above
+to be installed. After installing the unit:
+
+```bash
+systemctl --user daemon-reload
+```
+
+### Start, inspect, and stop
+
+```bash
+systemctl --user start mentorpi-conversation.service
+systemctl --user status mentorpi-conversation.service --no-pager
+journalctl --user -u mentorpi-conversation.service -n 30 -f
+```
+
+Wait for the session-active message before speaking. Ctrl+C exits the log
+viewer only; it does not stop the conversation.
+
+To stop microphone capture and close the session:
+
+```bash
+systemctl --user stop mentorpi-conversation.service
+systemctl --user is-active mentorpi-battery-monitor.service
+```
+
+The service requests an orderly shutdown of recording, playback, and the
+API session. It does not automatically restart after an error.
+After changing the environment or instructions file, restart the service.
+
+### Battery announcements during conversation
+
+Before starting, `battery_guard.py` records whether the battery monitor is
+active and stops it. The service's stop hook requests a monitor restart
+only if it was previously active, including after application failures.
+
+This is temporary coordination: no spoken battery warning is issued during
+conversation. The native Hiwonder beep remains unchanged. Do not manually
+start the battery monitor or invoke `speak` during a conversation, because
+independent audio playback is not yet coordinated.
+
+### Current scope and validation
+
+On Ruben, manual conversation, user interruptions, service startup and
+shutdown, and battery monitor restoration have been verified on hardware.
+
+`conversation/manual.py` remains the original two-minute diagnostic script.
+It does not manage the battery monitor; prefer the systemd service for
+normal use.
+
+The conversation currently uses generic instructions. It does not
+automatically load an OpenClaw workspace, identity, or memories, and has
+no backend tools or robot motion control. Wake-word activation, shared
+announcement handling, and acoustic echo cancellation are not implemented.
