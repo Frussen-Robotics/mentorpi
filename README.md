@@ -271,13 +271,50 @@ End-to-end speech from the service should also be verified on each robot.
 ## GPT Live conversation
 
 The conversation service connects the robot's microphone and speaker to
-`gpt-live-1`. It uses its own Python environment and does not invoke the
-external `speak` skill.
+`gpt-live-1`. Ruben's current deployment routes that realtime voice session
+through **OpenClaw Talk/Gateway**, allowing the voice layer to consult the
+OpenClaw agent for tools and agent context.
 
-The GPT Live session starts on demand, not at boot. The optional local wake listener starts at boot and activates it. Microphone audio is sent to OpenAI while
-the session is active. Input and output transcripts are printed to the
-systemd journal; do not share logs containing private conversations.
-The API session is configured with `store: false`.
+The older direct Python conversation path remains in the repository as a
+fallback and diagnostic implementation.
+
+The GPT Live session starts on demand, not at boot. The local wake listener
+starts at boot and activates it. Input and output transcripts are printed to
+the systemd journal; do not share logs containing private conversations.
+
+### Current OpenClaw path on Ruben
+
+The deployed voice path is:
+
+```text
+OpenWakeWord: "Hey Ruben"
+        ↓
+mentorpi-conversation.service
+        ↓
+OpenClaw Gateway / Talk
+        ↓
+GPT Live realtime voice
+        ↕
+OpenClaw agent consultation / Astra
+```
+
+A short silent PCM frame opens the initial Talk turn before audio playback.
+Ruben then plays a cached Cedar `"Eccomi"` greeting locally and begins live
+microphone streaming.
+
+The spoken phrase `"Notte Ruben"` is detected from partial user transcripts.
+After detection, microphone input is silenced while Ruben completes his spoken
+goodbye; playback is drained before the Talk session closes.
+
+The complete lifecycle
+
+```text
+Hey Ruben → Eccomi → conversation → Notte Ruben → goodbye → wake listening
+```
+
+has been verified repeatedly on hardware, including consecutive wake cycles and
+conversations lasting longer than 120 seconds.
+
 
 ### Install on a new robot
 
@@ -358,17 +395,23 @@ independent audio playback is not yet coordinated.
 
 ### Current scope and validation
 
-On Ruben, manual conversation, user interruptions, service startup and
-shutdown, and battery monitor restoration have been verified on hardware.
+On Ruben, bidirectional realtime audio, user interruptions, OpenClaw Talk
+session creation, agent consultation, service startup and shutdown, spoken
+session closure, and battery monitor restoration have been verified on
+hardware.
 
-`conversation/manual.py` remains the original two-minute diagnostic script.
-It does not manage the battery monitor; prefer the systemd service for
-normal use.
+The current deployment has also verified delegation from the realtime voice
+session to the Astra-backed OpenClaw agent and transcript continuity through
+the dedicated MentorPi OpenClaw session.
 
-The conversation can load an agent's identity and speaking style from
-a configured OpenClaw workspace. Memories and other conversations are not
-loaded. Backend tools, robot motion control, shared announcement handling,
-and acoustic echo cancellation are not implemented.
+`conversation/manual.py` remains the original direct Python diagnostic path.
+It does not manage the battery monitor; prefer the systemd service for normal
+use.
+
+Durable memory behavior across entirely separate voice sessions has not yet
+been treated as fully validated. Robot motion control through the voice agent,
+shared announcement handling, and acoustic echo cancellation are not yet part
+of the verified voice path.
 
 ## Voice identity
 
@@ -395,8 +438,43 @@ After editing identity files or configuration, start a new session:
 systemctl --user restart mentorpi-conversation.service
 ```
 
-Restarting does not restore the previous conversation history.
-Workspace memories and other OpenClaw chats are not synchronized.
+Restarting the legacy direct Python path does not restore its previous
+conversation history. Ruben's current OpenClaw Talk path instead uses a
+dedicated OpenClaw session; durable cross-session memory behavior remains to
+be validated separately.
+
+## Local wake word
+
+The active wake listener uses **OpenWakeWord** locally on the Raspberry Pi.
+
+Ruben uses a custom ONNX model stored outside Git:
+
+```text
+hey_ruben.onnx
+hey_ruben.onnx.data
+```
+
+The configured wake phrase is `"Hey Ruben"`.
+
+Wake audio is PCM16 mono at 16 kHz. `arecord` output is accumulated in a
+continuous byte buffer and passed to OpenWakeWord in complete 1280-sample
+frames, so partial pipe reads do not discard audio.
+
+On the current Ruben hardware, the custom model is deployed with:
+
+```text
+WAKE_THRESHOLD=0.05
+```
+
+That threshold is specific to this trained model, microphone, and acoustic
+environment and should be calibrated independently on another robot.
+
+On detection, the wake listener releases the microphone before starting
+`mentorpi-conversation.service`. It suspends itself while the conversation is
+active, resets the OpenWakeWord model after the conversation ends, and then
+resumes listening automatically.
+
+The older Vosk listener remains available as a fallback implementation.
 
 On Ruben, the agent name, family reference, and absence of invented
 personal memories were checked in a spoken conversation.
