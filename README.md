@@ -158,18 +158,22 @@ the agent's separate OpenClaw workspace. A new robot can use a fresh workspace;
 it does not need a copy of Ruben's workspace.
 
 The battery monitor uses the external `speak` skill installed in that workspace.
-Its location is configured through `MENTORPI_SPEAK_SCRIPT`; the monitor does not
-require a workspace named `ruben-workspace` or a running OpenClaw agent.
+Its location is configured through `MENTORPI_SPEAK_SCRIPT`. Speech is synthesized
+through the local OpenClaw Gateway with `talk.speak`; provider credentials, model,
+and voice stay in OpenClaw rather than in the battery monitor configuration.
+The monitor does not require a workspace named `ruben-workspace` or a running
+OpenClaw agent.
 
 ## Automatic startup and battery announcements
 
 ### New robot setup
 
 1. Clone this repository and install the runtime dependencies as described above.
-2. Create the new agent's OpenClaw workspace and install the `speak` skill.
-   Configure its OpenAI API key and ALSA audio device, then verify speech manually.
+2. Create the new agent's OpenClaw workspace and install `@frussen-robotics/speak`.
+   Configure an OpenClaw Talk speech provider and ALSA audio device, then verify
+   speech manually.
 3. Install the runtime and battery monitor as user systemd services.
-4. Configure this robot's paths and credentials locally, outside Git.
+4. Configure this robot's paths and local service settings outside Git.
 
 The commands below are for a new installation. On an existing robot, inspect
 and merge existing configuration and service files instead of overwriting them.
@@ -197,14 +201,14 @@ Edit this local file and set:
 
 - `MENTORPI_BATTERY_SCRIPT`: absolute path to this repository's `battery_monitor.py`.
 - `MENTORPI_SPEAK_SCRIPT`: absolute path to the installed skill's `scripts/run.py`.
-- `OPENAI_API_KEY`: the speech API key.
 - `SPEAK_ALSA_DEVICE`: the audio device verified on this robot.
 
-Voice, polling interval, and voltage thresholds are also configurable in that
-file. An optional `MENTORPI_BATTERY_MESSAGE` overrides the spoken message.
+Polling interval and voltage thresholds are configurable in that file. An
+optional `MENTORPI_BATTERY_MESSAGE` overrides the spoken message.
 
-Never commit the real configuration file or API key. A shell `export` alone
-does not configure the systemd service.
+Never commit the real configuration file. Provider credentials belong to
+OpenClaw rather than this service. A shell `export` alone does not configure
+the systemd service.
 
 ### Enable the services
 
@@ -247,7 +251,8 @@ Do not copy this state to a new robot.
 The monitor records the attempt before invoking speech to prevent duplicate
 announcements after a restart. If speech fails, the error is logged and no
 automatic speech retry occurs until the monitor has rearmed.
-Speech has a 45-second timeout and requires network access and valid API credentials.
+Speech has a 45-second timeout and requires the local OpenClaw Gateway, a
+configured Talk speech provider, and any network access required by that provider.
 
 The monitor is an advisory notification, not a battery protection or shutdown
 mechanism.

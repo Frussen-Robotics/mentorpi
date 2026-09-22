@@ -88,8 +88,6 @@ def main():
     speak = Path(speak_setting).expanduser()
     if not speak.is_file():
         raise SystemExit(f"Speak script not found: {speak}")
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise SystemExit("OPENAI_API_KEY is missing")
 
     low = int(os.environ.get("MENTORPI_BATTERY_LOW_MV", "7200"))
     reset = int(os.environ.get("MENTORPI_BATTERY_RESET_MV", "7400"))
